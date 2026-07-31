@@ -21,15 +21,17 @@ const configureMiddleware = (app) => {
   // Helmet improves API security by setting some additional header checks
   // app.use(helmet());
 
-   app.use(xssClean());
+  app.use(xssClean());
 
-  // Add rate limit to API (100 requests per 10 mins)
-  app.use(
-    expressRateLimit({
-      windowMs: 10 * 60 * 1000,
-      max: 100,
-    }),
-  );
+  // Add rate limit to API only during non-production/local runs to avoid blocking Netlify proxy IPs
+  if (process.env.NODE_ENV !== 'production') {
+    app.use(
+      expressRateLimit({
+        windowMs: 10 * 60 * 1000,
+        max: 100,
+      }),
+    );
+  }
 
   // Prevent http param pollution
   app.use(hpp());
