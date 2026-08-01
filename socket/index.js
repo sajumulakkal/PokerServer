@@ -57,6 +57,17 @@ function getCurrentTables() {
   }));
 }
 
+// Helper to find the first open seat slot between 1 and maxPlayers
+function getFirstEmptySeat(table) {
+  const maxSeats = table.maxPlayers || 5;
+  for (let i = 1; i <= maxSeats; i++) {
+    if (!table.seats[i] || !table.seats[i].player) {
+      return i;
+    }
+  }
+  return null; // Table is full
+}
+
 const init = (socket, io) => {
   socket.on(CS_LOBBY_CONNECT, ({gameId, address, userInfo }) => {
     socket.join(gameId);
@@ -116,7 +127,6 @@ const init = (socket, io) => {
     }
     
     const player = players[socket.id];
-    console.log("tableid====>", rawTableId, table, player);
 
     if (!table) {
       console.error(`[Error] Table not found for tableId: ${JSON.stringify(payload)}`);
@@ -124,12 +134,28 @@ const init = (socket, io) => {
       return;
     }
 
+    // Check if player is already seated at this table
+    const existingSeat = Object.values(table.seats).find(
+      (seat) => seat && seat.player && seat.player.socketId === socket.id
+    );
+
     table.addPlayer(player);
     socket.emit(SC_TABLE_JOINED, { tables: getCurrentTables(), tableId: rawTableId });
     socket.broadcast.emit(SC_TABLES_UPDATED, getCurrentTables());
     
     const resolvedTableKey = tables[rawTableId] ? rawTableId : (tables[String(rawTableId)] ? String(rawTableId) : Number(rawTableId));
-    sitDown(resolvedTableKey, table.players.length, table.limit);
+    
+    // Automatically sit down in the first AVAILABLE seat slot (1-5) if not seated yet
+    if (!existingSeat) {
+      const emptySeat = getFirstEmptySeat(table);
+      if (emptySeat) {
+        sitDown(resolvedTableKey, emptySeat, config.INITIAL_CHIPS_AMOUNT);
+      } else {
+        console.warn("Table is full! Cannot assign seat.");
+      }
+    } else {
+      broadcastToTable(table);
+    }
 
     if (table.players && table.players.length > 0) {
       let message = `${player.name} joined the table.`;
@@ -201,6 +227,13 @@ const init = (socket, io) => {
     let table = tables[tableId] || tables[String(tableId)] || tables[Number(tableId)];
     if (!table) return;
     broadcastToTable(table, message, from);
+  });
+
+  // Explicit CS_SIT_DOWN handler when a player clicks an empty seat button
+  socket.on(CS_SIT_DOWN, ({ tableId, seatId, amount }) => {
+    const resolvedSeat = seatId || 1;
+    const resolvedAmount = amount || config.INITIAL_CHIPS_AMOUNT;
+    sitDown(tableId, resolvedSeat, resolvedAmount);
   });
 
   const sitDown = (tableId, seatId, amount) => {
