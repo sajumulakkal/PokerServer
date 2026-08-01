@@ -1,9 +1,8 @@
-const express = require('express');
+ const express = require('express');
 const cookieParser = require('cookie-parser');
 const mongoSanitize = require('express-mongo-sanitize');
 // const helmet = require('helmet');
 const xssClean = require('xss-clean');
-const expressRateLimit = require('express-rate-limit');
 const hpp = require('hpp');
 const cors = require('cors');
 const logger = require('./logger');
@@ -23,15 +22,7 @@ const configureMiddleware = (app) => {
 
   app.use(xssClean());
 
-  // Add rate limit to API only during non-production/local runs to avoid blocking Netlify proxy IPs
-  if (process.env.NODE_ENV !== 'production') {
-    app.use(
-      expressRateLimit({
-        windowMs: 10 * 60 * 1000,
-        max: 100,
-      }),
-    );
-  }
+  // NOTE: Rate limiting disabled to prevent blocking active Socket.io long-polling/sync calls
 
   // Prevent http param pollution
   app.use(hpp());
