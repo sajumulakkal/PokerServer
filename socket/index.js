@@ -120,40 +120,18 @@ const init = (socket, io) => {
 
     // 1. Resolve Player Username
     let incomingName = null;
+    let walletAddr = (payload && typeof payload === 'object' && payload.address) ? payload.address : `wallet-${socket.id.substring(0, 5)}`;
+    
     if (payload && typeof payload === 'object' && (payload.name || payload.username)) {
       const parsed = payload.name || payload.username;
       if (parsed !== 'Player') incomingName = parsed;
     }
 
-    // 2. STRICT DUP CLEANUP: Ensure socket/player is ONLY in ONE seat max
-    let userSeatedId = null;
-    for (let seatId = 1; seatId <= table.maxPlayers; seatId++) {
-      const s = table.seats[seatId];
-      if (s && s.player) {
-        // If seat belongs to generic default "Player" or inactive socket, wipe it!
-        if (s.player.name === 'Player' || !players[s.player.socketId]) {
-          table.seats[seatId] = null;
-        } else if (s.player.socketId === socket.id || (payload && s.player.id === payload.address)) {
-          if (userSeatedId === null) {
-            userSeatedId = seatId; // Keep first matched seat
-          } else {
-            table.seats[seatId] = null; // Purge secondary duplicate seat!
-          }
-        }
-      }
-    }
-
-    // Do not auto-seat if client hasn't provided details yet
-    if (!incomingName && (!players[socket.id] || players[socket.id].name === 'Player')) {
-      broadcastToTable(table);
-      return;
-    }
-
-    // Initialize or Update Player Session
+    // 2. Initialize or Update Player Session FIRST so player object exists
     if (!players[socket.id]) {
       players[socket.id] = new Player(
         socket.id,
-        (payload && payload.address) || `wallet-${socket.id.substring(0, 5)}`,
+        walletAddr,
         incomingName || 'Player',
         config.INITIAL_CHIPS_AMOUNT
       );
@@ -163,14 +141,37 @@ const init = (socket, io) => {
 
     const player = players[socket.id];
 
+    // 3. STRICT DUP CLEANUP: Keep 1 seat per user/socket, purge extra duplicate seats
+    let firstMatchedSeat = null;
+    for (let seatId = 1; seatId <= table.maxPlayers; seatId++) {
+      const s = table.seats[seatId];
+      if (s && s.player) {
+        if (s.player.name === 'Player' || !players[s.player.socketId]) {
+          table.seats[seatId] = null; // Purge unauthenticated ghost seat
+        } else if (s.player.socketId === socket.id || s.player.id === player.id || s.player.address === player.id) {
+          if (firstMatchedSeat === null) {
+            firstMatchedSeat = seatId; // Keep primary seat
+          } else {
+            table.seats[seatId] = null; // Purge duplicate seat!
+          }
+        }
+      }
+    }
+
+    // Do not auto-seat if client hasn't provided name details
+    if (!incomingName && player.name === 'Player') {
+      broadcastToTable(table);
+      return;
+    }
+
     table.addPlayer(player);
     socket.emit(SC_TABLE_JOINED, { tables: getCurrentTables(), tableId: rawTableId });
     socket.broadcast.emit(SC_TABLES_UPDATED, getCurrentTables());
     
     const resolvedTableKey = tables[rawTableId] ? rawTableId : (tables[String(rawTableId)] ? String(rawTableId) : Number(rawTableId));
     
-    // Auto-sit ONLY if not already seated anywhere
-    if (userSeatedId === null && player.name !== 'Player') {
+    // Auto-sit ONLY if not already seated in any seat
+    if (firstMatchedSeat === null && player.name !== 'Player') {
       const emptySeat = getFirstEmptySeat(table);
       if (emptySeat) {
         sitDown(resolvedTableKey, emptySeat, config.INITIAL_CHIPS_AMOUNT);
