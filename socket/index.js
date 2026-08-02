@@ -138,9 +138,12 @@ const init = (socket, io) => {
       return;
     }
 
-    // Check if player is already seated at this table
+    // Check if player is already seated at this table (by socketId OR wallet address)
     const existingSeat = Object.values(table.seats).find(
-      (seat) => seat && seat.player && seat.player.socketId === socket.id
+      (seat) => seat && seat.player && (
+        seat.player.socketId === socket.id ||
+        (player && seat.player.id === player.id)
+      )
     );
 
     table.addPlayer(player);
@@ -149,7 +152,7 @@ const init = (socket, io) => {
     
     const resolvedTableKey = tables[rawTableId] ? rawTableId : (tables[String(rawTableId)] ? String(rawTableId) : Number(rawTableId));
     
-    // Automatically sit down in the first AVAILABLE seat slot (1-5) if not seated yet
+    // Automatically sit down ONLY IF not already seated in any seat
     if (!existingSeat) {
       const emptySeat = getFirstEmptySeat(table);
       if (emptySeat) {
@@ -247,7 +250,7 @@ const init = (socket, io) => {
     if (player) {
       table.sitPlayer(player, seatId, amount);
 
-      // EXPLICIT NAME BINDING: Ensure seat object carries the player name
+      // EXPLICIT NAME BINDING: Ensure seat object carries player name properties
       if (table.seats && table.seats[seatId]) {
         table.seats[seatId].name = player.name;
         table.seats[seatId].playerName = player.name;
