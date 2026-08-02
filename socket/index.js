@@ -61,7 +61,9 @@ function getCurrentTables() {
 function getFirstEmptySeat(table) {
   const maxSeats = table.maxPlayers || 5;
   for (let i = 1; i <= maxSeats; i++) {
-    if (!table.seats[i] || !table.seats[i].player) {
+    const seat = table.seats[i];
+    // A seat is empty if it's null, missing a player, or has no valid active socket ID
+    if (!seat || !seat.player || !seat.player.socketId || !players[seat.player.socketId]) {
       return i;
     }
   }
@@ -116,29 +118,44 @@ const init = (socket, io) => {
     const rawTableId = (typeof payload === 'object' && payload !== null) ? payload.tableId : payload;
     const table = tables[rawTableId] || tables[String(rawTableId)] || tables[Number(rawTableId)];
     
-    // Auto-initialize player if session entry is missing
-    if (!players[socket.id]) {
-      const initialName = (payload && typeof payload === 'object' && (payload.name || payload.username)) 
-        ? (payload.name || payload.username) 
-        : 'Player';
-
-      players[socket.id] = new Player(
-        socket.id,
-        (payload && payload.address) || `local-wallet-${socket.id.substring(0, 5)}`,
-        initialName,
-        config.INITIAL_CHIPS_AMOUNT
-      );
-    }
-    
-    const player = players[socket.id];
-
     if (!table) {
       console.error(`[Error] Table not found for tableId: ${JSON.stringify(payload)}`);
       socket.emit('error', { message: 'Table not found' });
       return;
     }
 
-    // Check if player is already seated at this table (by socketId OR wallet address)
+    // 1. Extract proper player name passed from client payload
+    let incomingName = 'Player';
+    if (payload && typeof payload === 'object') {
+      incomingName = payload.name || payload.username || 'Player';
+    }
+
+    // 2. Initialize or update player session with true username
+    if (!players[socket.id]) {
+      players[socket.id] = new Player(
+        socket.id,
+        (payload && payload.address) || `local-wallet-${socket.id.substring(0, 5)}`,
+        incomingName,
+        config.INITIAL_CHIPS_AMOUNT
+      );
+    } else if (incomingName !== 'Player') {
+      players[socket.id].name = incomingName;
+    }
+
+    const player = players[socket.id];
+
+    // 3. PURGE GHOST SEATS: Remove any seated objects whose socket is no longer active in memory
+    for (let seatId = 1; seatId <= table.maxPlayers; seatId++) {
+      const s = table.seats[seatId];
+      if (s && s.player) {
+        const isActiveSocket = Object.values(players).some(p => p.socketId === s.player.socketId);
+        if (!isActiveSocket) {
+          table.seats[seatId] = null; // Clear unauthenticated/disconnected ghost seat
+        }
+      }
+    }
+
+    // 4. Check if current player is already seated at this table (by socketId OR wallet address)
     const existingSeat = Object.values(table.seats).find(
       (seat) => seat && seat.player && (
         seat.player.socketId === socket.id ||
