@@ -62,7 +62,7 @@ function getFirstEmptySeat(table) {
   const maxSeats = table.maxPlayers || 5;
   for (let i = 1; i <= maxSeats; i++) {
     const seat = table.seats[i];
-    if (!seat || !seat.player) {
+    if (!seat || !seat.player || seat.player.name === 'Player') {
       return i;
     }
   }
@@ -119,34 +119,43 @@ const init = (socket, io) => {
     }
 
     // 1. Resolve Player Username cleanly
-    let incomingName = 'Player';
+    let incomingName = null;
     if (payload && typeof payload === 'object' && (payload.name || payload.username)) {
-      incomingName = payload.name || payload.username;
+      const parsed = payload.name || payload.username;
+      if (parsed !== 'Player') incomingName = parsed;
     }
 
-    // 2. Initialize or Update Player Session
+    // 2. PURGE GHOST SEATS: Remove any seated objects named "Player" or with dead sockets
+    for (let seatId = 1; seatId <= table.maxPlayers; seatId++) {
+      const s = table.seats[seatId];
+      if (s && s.player) {
+        if (s.player.name === 'Player' || !players[s.player.socketId]) {
+          table.seats[seatId] = null; // Clear out unauthenticated default player
+        }
+      }
+    }
+
+    // If client has no valid name & hasn't registered yet, do not seat them
+    if (!incomingName && (!players[socket.id] || players[socket.id].name === 'Player')) {
+      broadcastToTable(table);
+      return;
+    }
+
+    // Initialize or Update Player Session
     if (!players[socket.id]) {
       players[socket.id] = new Player(
         socket.id,
         (payload && payload.address) || `wallet-${socket.id.substring(0, 5)}`,
-        incomingName,
+        incomingName || 'Player',
         config.INITIAL_CHIPS_AMOUNT
       );
-    } else if (incomingName && incomingName !== 'Player') {
+    } else if (incomingName) {
       players[socket.id].name = incomingName;
     }
 
     const player = players[socket.id];
 
-    // 3. Clear dead/unassigned ghost seats
-    for (let seatId = 1; seatId <= table.maxPlayers; seatId++) {
-      const s = table.seats[seatId];
-      if (s && s.player && !players[s.player.socketId]) {
-        table.seats[seatId] = null;
-      }
-    }
-
-    // 4. Check if current socket or wallet is already seated
+    // Check if current player is already seated
     const existingSeat = Object.values(table.seats).find(
       (seat) => seat && seat.player && (
         seat.player.socketId === socket.id ||
@@ -160,8 +169,8 @@ const init = (socket, io) => {
     
     const resolvedTableKey = tables[rawTableId] ? rawTableId : (tables[String(rawTableId)] ? String(rawTableId) : Number(rawTableId));
     
-    // 5. Automatically Sit Down in Seat 1 (or first available) if not seated
-    if (!existingSeat) {
+    // Automatically Sit Down ONLY IF valid name is provided and not already seated
+    if (!existingSeat && player.name !== 'Player') {
       const emptySeat = getFirstEmptySeat(table);
       if (emptySeat) {
         sitDown(resolvedTableKey, emptySeat, config.INITIAL_CHIPS_AMOUNT);
