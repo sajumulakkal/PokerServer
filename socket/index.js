@@ -127,7 +127,7 @@ const init = (socket, io) => {
       if (parsed !== 'Player') incomingName = parsed;
     }
 
-    // 2. Initialize or Update Player Session
+    // 2. Initialize or Update Player Session FIRST
     if (!players[socket.id]) {
       players[socket.id] = new Player(
         socket.id,
@@ -141,7 +141,7 @@ const init = (socket, io) => {
 
     const player = players[socket.id];
 
-    // 3. PURGE GHOST & DUPLICATE SEATS (Matches socketId OR player.name OR wallet address)
+    // 3. PURGE ALL GHOST AND DUPLICATE SEATS BEFORE SEATING
     let alreadySeatedSlot = null;
     for (let seatId = 1; seatId <= table.maxPlayers; seatId++) {
       const s = table.seats[seatId];
@@ -152,18 +152,18 @@ const init = (socket, io) => {
         const isGhost = s.player.name === 'Player' || !players[s.player.socketId];
 
         if (isGhost) {
-          table.seats[seatId] = null; // Clear unauthenticated seat
+          table.seats[seatId] = null;
         } else if (isSameSocket || isSameName || isSameAddress) {
           if (alreadySeatedSlot === null) {
-            alreadySeatedSlot = seatId; // Keep the primary seat
+            alreadySeatedSlot = seatId;
           } else {
-            table.seats[seatId] = null; // Purge duplicate seat!
+            table.seats[seatId] = null; // Purge duplicate seat slot
           }
         }
       }
     }
 
-    // Do not auto-seat if no valid name provided
+    // Skip seating if no name provided
     if (!incomingName && player.name === 'Player') {
       broadcastToTable(table);
       return;
@@ -175,7 +175,7 @@ const init = (socket, io) => {
     
     const resolvedTableKey = tables[rawTableId] ? rawTableId : (tables[String(rawTableId)] ? String(rawTableId) : Number(rawTableId));
     
-    // Auto-sit ONLY IF player is not already in a seat
+    // Auto-sit ONLY if not already in any seat slot
     if (alreadySeatedSlot === null && player.name !== 'Player') {
       const emptySeat = getFirstEmptySeat(table);
       if (emptySeat) {
@@ -267,12 +267,22 @@ const init = (socket, io) => {
     const table = tables[tableId] || tables[String(tableId)] || tables[Number(tableId)];
     if (!table) return;
     const player = players[socket.id];
+
     if (player) {
-      // GUARANTEE: Prevent sitting if already seated in another slot
-      const alreadySeated = Object.values(table.seats).some(
-        (s) => s && s.player && (s.player.socketId === socket.id || (s.player.name === player.name && player.name !== 'Player'))
-      );
-      if (alreadySeated) return;
+      // HARD SEATING GUARD: Refuse to sit if player or socket is ALREADY in any seat
+      const isAlreadySeatedAnywhere = Object.values(table.seats).some((s) => {
+        if (!s || !s.player) return false;
+        return (
+          s.player.socketId === socket.id ||
+          s.player.id === player.id ||
+          (player.name !== 'Player' && (s.player.name === player.name || s.name === player.name))
+        );
+      });
+
+      if (isAlreadySeatedAnywhere) {
+        broadcastToTable(table);
+        return;
+      }
 
       table.sitPlayer(player, seatId, amount);
 
