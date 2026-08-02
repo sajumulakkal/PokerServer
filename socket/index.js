@@ -62,24 +62,21 @@ function getFirstEmptySeat(table) {
   const maxSeats = table.maxPlayers || 5;
   for (let i = 1; i <= maxSeats; i++) {
     const seat = table.seats[i];
-    // A seat is empty if it's null, missing a player, or has no valid active socket ID
     if (!seat || !seat.player || !seat.player.socketId || !players[seat.player.socketId]) {
       return i;
     }
   }
-  return null; // Table is full
+  return null;
 }
 
 const init = (socket, io) => {
   socket.on(CS_LOBBY_CONNECT, ({gameId, address, userInfo }) => {
     socket.join(gameId);
     io.to(gameId).emit(SC_LOBBY_CONNECTED, {address, userInfo});
-    console.log(SC_LOBBY_CONNECTED, address, socket.id);
   });
   
   socket.on(CS_LOBBY_DISCONNECT, ({gameId, address, userInfo}) => {
     io.to(gameId).emit(SC_LOBBY_DISCONNECTED, {address, userInfo});
-    console.log(CS_LOBBY_DISCONNECT, address, socket.id);
   });
 
   socket.on(CS_LOBBY_CHAT, ({ gameId, text, userInfo }) => {
@@ -87,13 +84,11 @@ const init = (socket, io) => {
   });
 
   socket.on(CS_FETCH_LOBBY_INFO, ({walletAddress, socketId, gameId, username}) => {
-    const found = Object.values(players).find((player) => {
-      return player.id == walletAddress;
-    });
+    const found = Object.values(players).find((player) => player.id == walletAddress);
 
     if (found) {
       delete players[found.socketId];
-      Object.values(tables).map((table) => {
+      Object.values(tables).forEach((table) => {
         table.removePlayer(found.socketId);
         broadcastToTable(table);
       });
@@ -119,43 +114,46 @@ const init = (socket, io) => {
     const table = tables[rawTableId] || tables[String(rawTableId)] || tables[Number(rawTableId)];
     
     if (!table) {
-      console.error(`[Error] Table not found for tableId: ${JSON.stringify(payload)}`);
       socket.emit('error', { message: 'Table not found' });
       return;
     }
 
-    // 1. Extract proper player name passed from client payload
-    let incomingName = 'Player';
-    if (payload && typeof payload === 'object') {
-      incomingName = payload.name || payload.username || 'Player';
+    // 1. Check if client provided valid details
+    const hasValidDetails = payload && typeof payload === 'object' && (payload.name || payload.username) && payload.name !== 'Player';
+    const incomingName = hasValidDetails ? (payload.name || payload.username) : null;
+
+    // 2. Clear out any unauthenticated "Player" ghost seats from the table
+    for (let seatId = 1; seatId <= table.maxPlayers; seatId++) {
+      const s = table.seats[seatId];
+      if (s && s.player) {
+        // If seat belongs to generic default "Player" or inactive socket, wipe it!
+        if (s.player.name === 'Player' || !players[s.player.socketId]) {
+          table.seats[seatId] = null;
+        }
+      }
     }
 
-    // 2. Initialize or update player session with true username
+    // 3. Do not auto-seat anonymous clients missing name/address
+    if (!incomingName && !players[socket.id]) {
+      broadcastToTable(table);
+      return;
+    }
+
+    // Initialize player if not present
     if (!players[socket.id]) {
       players[socket.id] = new Player(
         socket.id,
-        (payload && payload.address) || `local-wallet-${socket.id.substring(0, 5)}`,
-        incomingName,
+        (payload && payload.address) || `wallet-${socket.id.substring(0, 5)}`,
+        incomingName || 'Player',
         config.INITIAL_CHIPS_AMOUNT
       );
-    } else if (incomingName !== 'Player') {
+    } else if (incomingName) {
       players[socket.id].name = incomingName;
     }
 
     const player = players[socket.id];
 
-    // 3. PURGE GHOST SEATS: Remove any seated objects whose socket is no longer active in memory
-    for (let seatId = 1; seatId <= table.maxPlayers; seatId++) {
-      const s = table.seats[seatId];
-      if (s && s.player) {
-        const isActiveSocket = Object.values(players).some(p => p.socketId === s.player.socketId);
-        if (!isActiveSocket) {
-          table.seats[seatId] = null; // Clear unauthenticated/disconnected ghost seat
-        }
-      }
-    }
-
-    // 4. Check if current player is already seated at this table (by socketId OR wallet address)
+    // Check if player is already seated
     const existingSeat = Object.values(table.seats).find(
       (seat) => seat && seat.player && (
         seat.player.socketId === socket.id ||
@@ -169,13 +167,11 @@ const init = (socket, io) => {
     
     const resolvedTableKey = tables[rawTableId] ? rawTableId : (tables[String(rawTableId)] ? String(rawTableId) : Number(rawTableId));
     
-    // Automatically sit down ONLY IF not already seated in any seat
-    if (!existingSeat) {
+    // Auto-sit ONLY valid registered players
+    if (!existingSeat && incomingName) {
       const emptySeat = getFirstEmptySeat(table);
       if (emptySeat) {
         sitDown(resolvedTableKey, emptySeat, config.INITIAL_CHIPS_AMOUNT);
-      } else {
-        console.warn("Table is full! Cannot assign seat.");
       }
     } else {
       broadcastToTable(table);
@@ -253,7 +249,6 @@ const init = (socket, io) => {
     broadcastToTable(table, message, from);
   });
 
-  // Explicit CS_SIT_DOWN handler when a player clicks an empty seat button
   socket.on(CS_SIT_DOWN, ({ tableId, seatId, amount }) => {
     const resolvedSeat = seatId || 1;
     const resolvedAmount = amount || config.INITIAL_CHIPS_AMOUNT;
@@ -267,7 +262,6 @@ const init = (socket, io) => {
     if (player) {
       table.sitPlayer(player, seatId, amount);
 
-      // EXPLICIT NAME BINDING: Ensure seat object carries player name properties
       if (table.seats && table.seats[seatId]) {
         table.seats[seatId].name = player.name;
         table.seats[seatId].playerName = player.name;
@@ -277,10 +271,9 @@ const init = (socket, io) => {
       }
 
       let message = `${player.name} sat down in Seat ${seatId}`;
-
       updatePlayerBankroll(player, -amount);
-
       broadcastToTable(table, message);
+      
       if (table.activePlayers().length === 2) {
         initNewHand(table);
       }
@@ -294,7 +287,6 @@ const init = (socket, io) => {
 
     table.rebuyPlayer(seatId, amount);
     updatePlayerBankroll(player, -amount);
-
     broadcastToTable(table);
   });
 
@@ -313,7 +305,6 @@ const init = (socket, io) => {
     }
 
     table.standPlayer(socket.id);
-
     broadcastToTable(table, message);
     if (table.activePlayers().length === 1) {
       clearForOnePlayer(table);
