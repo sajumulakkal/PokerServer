@@ -118,24 +118,32 @@ const init = (socket, io) => {
       return;
     }
 
-    // 1. Resolve Player Username cleanly
+    // 1. Resolve Player Username
     let incomingName = null;
     if (payload && typeof payload === 'object' && (payload.name || payload.username)) {
       const parsed = payload.name || payload.username;
       if (parsed !== 'Player') incomingName = parsed;
     }
 
-    // 2. PURGE GHOST SEATS: Remove any seated objects named "Player" or with dead sockets
+    // 2. STRICT DUP CLEANUP: Ensure socket/player is ONLY in ONE seat max
+    let userSeatedId = null;
     for (let seatId = 1; seatId <= table.maxPlayers; seatId++) {
       const s = table.seats[seatId];
       if (s && s.player) {
+        // If seat belongs to generic default "Player" or inactive socket, wipe it!
         if (s.player.name === 'Player' || !players[s.player.socketId]) {
-          table.seats[seatId] = null; // Clear out unauthenticated default player
+          table.seats[seatId] = null;
+        } else if (s.player.socketId === socket.id || (payload && s.player.id === payload.address)) {
+          if (userSeatedId === null) {
+            userSeatedId = seatId; // Keep first matched seat
+          } else {
+            table.seats[seatId] = null; // Purge secondary duplicate seat!
+          }
         }
       }
     }
 
-    // If client has no valid name & hasn't registered yet, do not seat them
+    // Do not auto-seat if client hasn't provided details yet
     if (!incomingName && (!players[socket.id] || players[socket.id].name === 'Player')) {
       broadcastToTable(table);
       return;
@@ -155,22 +163,14 @@ const init = (socket, io) => {
 
     const player = players[socket.id];
 
-    // Check if current player is already seated
-    const existingSeat = Object.values(table.seats).find(
-      (seat) => seat && seat.player && (
-        seat.player.socketId === socket.id ||
-        (player && seat.player.id === player.id)
-      )
-    );
-
     table.addPlayer(player);
     socket.emit(SC_TABLE_JOINED, { tables: getCurrentTables(), tableId: rawTableId });
     socket.broadcast.emit(SC_TABLES_UPDATED, getCurrentTables());
     
     const resolvedTableKey = tables[rawTableId] ? rawTableId : (tables[String(rawTableId)] ? String(rawTableId) : Number(rawTableId));
     
-    // Automatically Sit Down ONLY IF valid name is provided and not already seated
-    if (!existingSeat && player.name !== 'Player') {
+    // Auto-sit ONLY if not already seated anywhere
+    if (userSeatedId === null && player.name !== 'Player') {
       const emptySeat = getFirstEmptySeat(table);
       if (emptySeat) {
         sitDown(resolvedTableKey, emptySeat, config.INITIAL_CHIPS_AMOUNT);
