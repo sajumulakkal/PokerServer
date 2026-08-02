@@ -127,7 +127,7 @@ const init = (socket, io) => {
       if (parsed !== 'Player') incomingName = parsed;
     }
 
-    // 2. Initialize or Update Player Session FIRST
+    // 2. Initialize or Update Player Session
     if (!players[socket.id]) {
       players[socket.id] = new Player(
         socket.id,
@@ -141,7 +141,7 @@ const init = (socket, io) => {
 
     const player = players[socket.id];
 
-    // 3. PURGE ALL GHOST AND DUPLICATE SEATS BEFORE SEATING
+    // 3. PURGE ALL GHOST AND DUPLICATE SEATS
     let alreadySeatedSlot = null;
     for (let seatId = 1; seatId <= table.maxPlayers; seatId++) {
       const s = table.seats[seatId];
@@ -157,19 +157,24 @@ const init = (socket, io) => {
           if (alreadySeatedSlot === null) {
             alreadySeatedSlot = seatId;
           } else {
-            table.seats[seatId] = null; // Purge duplicate seat slot
+            table.seats[seatId] = null; // Clear extra duplicate seats
           }
         }
       }
     }
 
-    // Skip seating if no name provided
+    // Skip if no valid name provided
     if (!incomingName && player.name === 'Player') {
       broadcastToTable(table);
       return;
     }
 
-    table.addPlayer(player);
+    // Guard: Only add player to table.players if not already present
+    const isPlayerInTableList = table.players.some((p) => p && (p.socketId === socket.id || p.id === player.id));
+    if (!isPlayerInTableList) {
+      table.addPlayer(player);
+    }
+
     socket.emit(SC_TABLE_JOINED, { tables: getCurrentTables(), tableId: rawTableId });
     socket.broadcast.emit(SC_TABLES_UPDATED, getCurrentTables());
     
