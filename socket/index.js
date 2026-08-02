@@ -100,7 +100,7 @@ const init = (socket, io) => {
     players[socketId] = new Player(
       socketId,
       walletAddress,
-      username,
+      username || 'Player',
       config.INITIAL_CHIPS_AMOUNT,
     );
     socket.emit(SC_RECEIVE_LOBBY_INFO, {
@@ -118,10 +118,14 @@ const init = (socket, io) => {
     
     // Auto-initialize player if session entry is missing
     if (!players[socket.id]) {
+      const initialName = (payload && typeof payload === 'object' && (payload.name || payload.username)) 
+        ? (payload.name || payload.username) 
+        : 'Player';
+
       players[socket.id] = new Player(
         socket.id,
-        `local-wallet-${socket.id.substring(0, 5)}`,
-        'Player',
+        (payload && payload.address) || `local-wallet-${socket.id.substring(0, 5)}`,
+        initialName,
         config.INITIAL_CHIPS_AMOUNT
       );
     }
@@ -242,6 +246,16 @@ const init = (socket, io) => {
     const player = players[socket.id];
     if (player) {
       table.sitPlayer(player, seatId, amount);
+
+      // EXPLICIT NAME BINDING: Ensure seat object carries the player name
+      if (table.seats && table.seats[seatId]) {
+        table.seats[seatId].name = player.name;
+        table.seats[seatId].playerName = player.name;
+        if (table.seats[seatId].player) {
+          table.seats[seatId].player.name = player.name;
+        }
+      }
+
       let message = `${player.name} sat down in Seat ${seatId}`;
 
       updatePlayerBankroll(player, -amount);
