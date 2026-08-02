@@ -1,4 +1,4 @@
- const jwt = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 const Table = require('../game/Table');
 const Player = require('../game/Player');
 const {
